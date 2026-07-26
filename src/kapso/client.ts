@@ -47,8 +47,16 @@ export class KapsoClient implements WhatsAppSender {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async sendText(to: string, body: string): Promise<void> {
-    const payload: KapsoOutboundText = { to, type: 'text', text: { body } };
+  async sendText(to: string, body: string, messageId?: string): Promise<void> {
+    const cleanTo = to.replace(/^\+/, '');
+    const payload: KapsoOutboundText = {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: cleanTo,
+      type: 'text',
+      text: { body },
+      ...(messageId !== undefined ? { context: { message_id: messageId } } : {}),
+    };
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -73,6 +81,8 @@ export class KapsoClient implements WhatsAppSender {
 
       if (!response.ok) {
         const retryable = response.status === 429 || (response.status >= 500 && response.status <= 599);
+        const body = await response.text().catch(() => 'no body');
+        console.error('kapso send failed', { status: response.status, body: body.slice(0, 200) });
         throw new KapsoSendError(`Kapso returned HTTP ${response.status}`, retryable, response.status);
       }
     } finally {

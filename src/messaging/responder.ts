@@ -54,12 +54,12 @@ export class Responder {
   }
 
   /** Envia el veredicto corto derivado del analisis. */
-  async respondWithResult(to: string, result: AnalysisResult): Promise<void> {
-    await this.sender.sendText(to, formatVerdict(result));
+  async respondWithResult(to: string, result: AnalysisResult, replyToMessageId?: string): Promise<void> {
+    await this.sender.sendText(to, formatVerdict(result), replyToMessageId);
   }
 
   /** Envia un texto fijo (ej. acuse o modo degradado). */
-  async respondWithText(to: string, body: string): Promise<void> {
-    await this.sender.sendText(to, body);
+  async respondWithText(to: string, body: string, replyToMessageId?: string): Promise<void> {
+    await this.sender.sendText(to, body, replyToMessageId);
   }
 }

@@ -143,11 +143,14 @@ export type IgnorableReason =
 
 /* ------------------------- Salida hacia Kapso ------------------------- */
 
-/** Mensaje de texto saliente hacia Kapso. */
+/** Mensaje de texto saliente hacia Kapso (WhatsApp Cloud API). */
 export interface KapsoOutboundText {
+  readonly messaging_product: 'whatsapp';
+  readonly recipient_type: 'individual';
   readonly to: string;
   readonly type: 'text';
   readonly text: { readonly body: string };
+  readonly context?: { readonly message_id: string };
 }
 
 /** Respuesta esperada de Kapso al enviar un mensaje. */

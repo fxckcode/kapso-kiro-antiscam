@@ -115,7 +115,7 @@ async function processRecord(record: SQSRecord, deps: ProcessorDeps): Promise<Re
   }
 
   try {
-    await deps.responder.respondWithResult(analysisEvent.routingToken, analysis.result);
+    await deps.responder.respondWithResult(analysisEvent.routingToken, analysis.result, analysisEvent.messageId);
   } catch (error) {
     const retryable = !(error instanceof KapsoSendError) || error.retryable;
     logger.error('kapso send failed after analysis', {

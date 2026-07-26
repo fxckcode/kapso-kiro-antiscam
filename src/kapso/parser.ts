@@ -103,7 +103,7 @@ function parseMetaBody(json: Record<string, unknown>): ParsedWebhook {
             conversationId:
               typeof v.conversation_id === 'string'
                 ? v.conversation_id
-                : validated.from,
+                : validated.from.replace(/^\+/, ''),
           };
         }
       }

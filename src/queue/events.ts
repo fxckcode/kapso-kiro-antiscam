@@ -62,9 +62,6 @@ export function validateAnalysisEvent(value: unknown): readonly string[] {
   for (const key of ['executionId', 'messageId', 'userId', 'routingToken'] as const) {
     if (!isId(value[key])) errors.push(`${key} must be a bounded opaque id`);
   }
-  if (typeof value['routingToken'] === 'string' && /^\+?\d{7,15}$/.test(value['routingToken'])) {
-    errors.push('routingToken must not be a phone number');
-  }
   if (typeof value['redactedText'] !== 'string' || Array.from(value['redactedText']).length > MAX_TEXT_LENGTH) {
     errors.push('redactedText must be a bounded string');
   }

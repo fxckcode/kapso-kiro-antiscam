@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { KapsoClient, KapsoSendError } from '../../src/kapso/client';
 
 function response(status: number): Response {
-  return { ok: status >= 200 && status < 300, status } as unknown as Response;
+  return { ok: status >= 200 && status < 300, status, text: () => Promise.resolve('') } as unknown as Response;
 }
 
 function client(fetchImpl: typeof fetch): KapsoClient {

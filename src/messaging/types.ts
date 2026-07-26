@@ -49,5 +49,5 @@ export interface OutboundMessage {
  * usa para enviar un resultado de analisis; LambdaWebhook no envia mensajes.
  */
 export interface WhatsAppSender {
-  sendText(to: string, body: string): Promise<void>;
+  sendText(to: string, body: string, messageId?: string): Promise<void>;
 }
