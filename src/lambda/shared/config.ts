@@ -14,6 +14,7 @@ import { AwsSecretsResolver, type SecretsResolver } from './secrets';
 export interface WebhookConfig {
   readonly awsRegion: string;
   readonly sqsQueueUrl: string;
+  readonly idempotencyTableName: string;
   /** Secreto para validar la firma del webhook. */
   readonly webhookSecret: string;
   readonly signatureHeader: string;
@@ -27,6 +28,7 @@ export interface WebhookConfig {
 export interface ProcessorConfig {
   readonly awsRegion: string;
   readonly kapsoApiBaseUrl: string;
+  readonly idempotencyTableName: string;
   /** API key para responder por Kapso. */
   readonly kapsoApiKey: string;
   readonly kapsoPhoneNumberId: string | undefined;
@@ -49,6 +51,7 @@ export async function loadWebhookConfig(
   return {
     awsRegion: required(env, 'AWS_REGION'),
     sqsQueueUrl: required(env, 'SQS_QUEUE_URL'),
+    idempotencyTableName: required(env, 'IDEMPOTENCY_TABLE_NAME'),
     webhookSecret,
     signatureHeader: env['KAPSO_SIGNATURE_HEADER'] ?? DEFAULT_SIGNATURE_HEADER,
     tokenHeader: env['KAPSO_TOKEN_HEADER'],
@@ -67,6 +70,7 @@ export async function loadProcessorConfig(
   return {
     awsRegion: required(env, 'AWS_REGION'),
     kapsoApiBaseUrl: required(env, 'KAPSO_API_BASE_URL'),
+    idempotencyTableName: required(env, 'IDEMPOTENCY_TABLE_NAME'),
     kapsoApiKey,
     kapsoPhoneNumberId: env['KAPSO_PHONE_NUMBER_ID'],
   };

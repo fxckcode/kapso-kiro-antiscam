@@ -44,8 +44,8 @@ export class QueuePublisher {
       MessageBody: JSON.stringify(event),
       MessageAttributes: {
         messageId: { DataType: 'String', StringValue: event.messageId },
-        schemaVersion: { DataType: 'String', StringValue: event.schemaVersion },
-        contentType: { DataType: 'String', StringValue: event.message.type },
+        schemaVersion: { DataType: 'String', StringValue: String(event.schemaVersion) },
+        eventType: { DataType: 'String', StringValue: event.eventType },
       },
     });
 

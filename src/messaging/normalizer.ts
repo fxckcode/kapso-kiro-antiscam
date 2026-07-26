@@ -6,8 +6,7 @@
  * El texto crudo resultante vive solo en memoria de la LambdaWebhook.
  */
 import type { KapsoInboundMessage, KapsoMetadata } from '../kapso/types';
-import type { MediaReference } from '../queue/events';
-import type { NormalizedInboundMessage, NormalizedContentType } from './types';
+import type { MediaReference, NormalizedInboundMessage, NormalizedContentType } from './types';
 
 const DEFAULT_LOCALE = 'es';
 

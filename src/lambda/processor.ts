@@ -1,58 +1,36 @@
 /**
- * LambdaProcessor: consume la cola SQS de analisis y responde por Kapso.
- *
- * Contrato de fallos (SQS batch):
- *  - Usa `reportBatchItemFailures`: solo los records que fallan de forma
- *    TRANSITORIA (analisis o envio por Kapso) se devuelven en
- *    `batchItemFailures`, para que SQS reintente y, tras maxReceiveCount,
- *    caigan a la DLQ.
- *  - Los records NO recuperables (JSON invalido o esquema invalido) se
- *    descartan (se loguean y no se reintentan) para no envenenar la cola.
- *
- * Reglas:
- *  - NO importa src/detection: depende del puerto `AnalysisPipeline`.
- *  - NO loguea contenido crudo ni telefono; solo `userId` (hash) y `messageId`.
- *
- * Enrutado de la respuesta: el evento no contiene el telefono (solo el userId
- * seudonimizado). Se responde usando `kapsoConversationId`. PENDIENTE (§13):
- * confirmar que Kapso permite responder por conversacion; si exige el telefono,
- * infra debe inyectar un token de entrega cifrado (nunca el numero en claro).
+ * LambdaProcessor consume SQS, delega el analisis al puerto inyectado y envia
+ * una respuesta solo cuando hay un resultado. No contiene un agente ni emite
+ * el antiguo mensaje "analisis no conectado".
  */
-import type { SQSEvent, SQSRecord, SQSBatchResponse, SQSBatchItemFailure } from 'aws-lambda';
+import type { SQSBatchItemFailure, SQSBatchResponse, SQSEvent, SQSRecord } from 'aws-lambda';
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
+import { KapsoClient, KapsoSendError } from '../kapso/client';
 import { Responder } from '../messaging/responder';
-import { KapsoClient } from '../kapso/client';
-import { routingCipherFromEnv, type RoutingTokenCipher } from '../messaging/routing-token';
-import type { AnalysisPipeline, AnalysisResult } from '../ports/analysis';
+import type { AnalysisResult, AnalysisService } from '../ports/analysis';
+import { DynamoIdempotencyStore } from '../queue/dynamo-idempotency-store';
 import { validateAnalysisEvent, type AnalysisRequestedEvent } from '../queue/events';
+import type { IdempotencyStore, ProcessingClaim } from '../queue/idempotency';
 import { loadProcessorConfig, type ProcessorConfig } from './shared/config';
 import { createLogger, type Logger } from './shared/logger';
 
-/** Mensaje de modo degradado cuando el pipeline de analisis aun no esta conectado. */
-export const ANALYSIS_NOT_CONNECTED_MESSAGE =
-  '✅ Recibi tu mensaje. El analisis todavia no esta conectado, intenta mas tarde.';
-
-/** Dependencias inyectables (facilita tests y el cableado de infra). */
 export interface ProcessorDeps {
   readonly responder: Responder;
   readonly logger: Logger;
-  /** Puerto de analisis. Si esta ausente, se responde en modo degradado. */
-  readonly analysisPipeline?: AnalysisPipeline;
-  /** Cipher opcional para descifrar el routing token. Default: desactivado. */
-  readonly routingCipher?: RoutingTokenCipher;
+  readonly idempotency: IdempotencyStore;
+  readonly analysisService?: AnalysisService;
 }
 
 export function createProcessorHandler(deps: ProcessorDeps) {
   return async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
     const batchItemFailures: SQSBatchItemFailure[] = [];
-
     for (const record of event.Records) {
-      const outcome = await processRecord(record, deps);
-      if (outcome === 'retry') {
+      if ((await processRecord(record, deps)) === 'retry') {
         batchItemFailures.push({ itemIdentifier: record.messageId });
       }
     }
-
     return { batchItemFailures };
   };
 }
@@ -60,9 +38,7 @@ export function createProcessorHandler(deps: ProcessorDeps) {
 type RecordOutcome = 'done' | 'retry';
 
 async function processRecord(record: SQSRecord, deps: ProcessorDeps): Promise<RecordOutcome> {
-  const { responder, logger, analysisPipeline } = deps;
-
-  // 1. Parseo del body (no recuperable si falla).
+  const { idempotency, logger } = deps;
   let parsed: unknown;
   try {
     parsed = JSON.parse(record.body);
@@ -71,105 +47,150 @@ async function processRecord(record: SQSRecord, deps: ProcessorDeps): Promise<Re
     return 'done';
   }
 
-  // 2. Validacion de esquema (no recuperable si falla).
-  const errors = validateAnalysisEvent(parsed);
-  if (errors.length > 0) {
+  const validationErrors = validateAnalysisEvent(parsed);
+  if (validationErrors.length > 0) {
     logger.warn('sqs record failed schema validation, dropping', {
       sqsMessageId: record.messageId,
-      errorCount: errors.length,
+      errorCount: validationErrors.length,
     });
     return 'done';
   }
-
   const analysisEvent = parsed as AnalysisRequestedEvent;
 
-  // Enrutado: si viene routing token cifrado y el cipher esta habilitado,
-  // descifrar para obtener el destino; si no, usar kapsoConversationId.
-  let replyTo: string | undefined = analysisEvent.meta.kapsoConversationId;
-  if (analysisEvent.encryptedRoutingToken !== undefined && deps.routingCipher?.enabled) {
-    try {
-      replyTo = await deps.routingCipher.decrypt(analysisEvent.encryptedRoutingToken);
-    } catch (err) {
-      // Fallo de KMS: transitorio -> reintentar (bounded por maxReceiveCount).
-      logger.error('failed to decrypt routing token', {
-        userId: analysisEvent.userId,
-        messageId: analysisEvent.messageId,
-        error: errorMessage(err),
-      });
-      return 'retry';
-    }
-  }
-
-  if (replyTo === undefined || replyTo.length === 0) {
-    // Sin destino de respuesta no hay accion util; no tiene sentido reintentar.
-    logger.warn('no reply destination on event, dropping', {
-      userId: analysisEvent.userId,
-      messageId: analysisEvent.messageId,
-    });
-    return 'done';
-  }
-
-  // 3. Modo degradado: pipeline no conectado.
-  if (analysisPipeline === undefined) {
-    try {
-      await responder.respondWithText(replyTo, ANALYSIS_NOT_CONNECTED_MESSAGE);
-      logger.info('responded in degraded mode (no pipeline)', {
-        userId: analysisEvent.userId,
-        messageId: analysisEvent.messageId,
-      });
-      return 'done';
-    } catch (err) {
-      logger.error('kapso send failed in degraded mode', {
-        userId: analysisEvent.userId,
-        messageId: analysisEvent.messageId,
-        error: errorMessage(err),
-      });
-      return 'retry';
-    }
-  }
-
-  // 4. Analisis real + respuesta.
-  let result: AnalysisResult;
+  let claim: ProcessingClaim;
   try {
-    result = await analysisPipeline.analyze(analysisEvent);
-  } catch (err) {
-    logger.error('analysis pipeline failed', {
+    claim = await idempotency.claimProcessing(analysisEvent.messageId);
+  } catch (error) {
+    logger.error('idempotency processing claim failed', {
       userId: analysisEvent.userId,
       messageId: analysisEvent.messageId,
-      error: errorMessage(err),
+      error: errorMessage(error),
     });
+    return 'retry';
+  }
+  if (claim.kind === 'responded') return 'done';
+  // La concesion puede pertenecer al webhook u otro worker; no borrar SQS aun.
+  if (claim.kind === 'busy') return 'retry';
+
+  if (deps.analysisService === undefined) {
+    logger.warn('analysis service is not configured', {
+      userId: analysisEvent.userId,
+      messageId: analysisEvent.messageId,
+    });
+    await releaseForRetry(idempotency, analysisEvent, claim.leaseToken, logger);
+    return 'retry';
+  }
+
+  let analysis: Awaited<ReturnType<AnalysisService['analyze']>>;
+  try {
+    analysis = await deps.analysisService.analyze({
+      executionId: analysisEvent.executionId,
+      redactedText: analysisEvent.redactedText,
+      urlReferences: analysisEvent.urlReferences,
+    });
+  } catch (error) {
+    logger.error('analysis service failed', {
+      userId: analysisEvent.userId,
+      messageId: analysisEvent.messageId,
+      error: errorMessage(error),
+    });
+    await releaseForRetry(idempotency, analysisEvent, claim.leaseToken, logger);
+    return 'retry';
+  }
+
+  if (analysis.status === 'retryable_error') {
+    await releaseForRetry(idempotency, analysisEvent, claim.leaseToken, logger);
+    return 'retry';
+  }
+  if ((analysis.status !== 'success' && analysis.status !== 'fallback') || !isAnalysisResult(analysis.result)) {
+    logger.error('analysis service returned no usable result', {
+      userId: analysisEvent.userId,
+      messageId: analysisEvent.messageId,
+    });
+    await releaseForRetry(idempotency, analysisEvent, claim.leaseToken, logger);
     return 'retry';
   }
 
   try {
-    await responder.respondWithResult(replyTo, result);
-    logger.info('analysis responded', {
-      userId: analysisEvent.userId,
-      messageId: analysisEvent.messageId,
-      verdict: result.verdict,
-    });
-    return 'done';
-  } catch (err) {
+    await deps.responder.respondWithResult(analysisEvent.routingToken, analysis.result);
+  } catch (error) {
+    const retryable = !(error instanceof KapsoSendError) || error.retryable;
     logger.error('kapso send failed after analysis', {
       userId: analysisEvent.userId,
       messageId: analysisEvent.messageId,
-      error: errorMessage(err),
+      retryable,
+      error: errorMessage(error),
+    });
+    await releaseForRetry(idempotency, analysisEvent, claim.leaseToken, logger);
+    return retryable ? 'retry' : 'done';
+  }
+
+  try {
+    await idempotency.markResponded(analysisEvent.messageId, claim.leaseToken);
+  } catch (error) {
+    // El envio ya ocurrio; la marca fallida se reintentara y el store decide si duplica.
+    logger.error('failed to mark response as sent', {
+      userId: analysisEvent.userId,
+      messageId: analysisEvent.messageId,
+      error: errorMessage(error),
     });
     return 'retry';
   }
+
+  logger.info('analysis responded', { userId: analysisEvent.userId, messageId: analysisEvent.messageId });
+  return 'done';
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : 'unknown';
+async function releaseForRetry(
+  idempotency: IdempotencyStore,
+  event: AnalysisRequestedEvent,
+  leaseToken: string,
+  logger: Logger,
+): Promise<void> {
+  try {
+    await idempotency.releaseProcessing(event.messageId, leaseToken);
+  } catch (error) {
+    logger.error('failed to release processing lease', {
+      userId: event.userId,
+      messageId: event.messageId,
+      error: errorMessage(error),
+    });
+  }
 }
 
-/** Handler por defecto: cablea Kapso como sender. Sin pipeline -> modo degradado. */
+function isAnalysisResult(value: unknown): value is AnalysisResult {
+  if (!isRecord(value)) return false;
+  const verdict = value['verdict'];
+  const score = value['riskScore'];
+  const confidence = value['confidence'];
+  return (
+    (verdict === 'scam' ||
+      verdict === 'suspicious' ||
+      verdict === 'insufficient_information' ||
+      verdict === 'likely_legitimate') &&
+    typeof score === 'number' &&
+    Number.isFinite(score) &&
+    typeof confidence === 'number' &&
+    Number.isFinite(confidence) &&
+    Array.isArray(value['recommendedActions']) &&
+    typeof value['shortExplanation'] === 'string'
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'unknown';
+}
+
 let cached: ReturnType<typeof createProcessorHandler> | undefined;
 
 export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
   if (cached === undefined) {
     const config: ProcessorConfig = await loadProcessorConfig();
-    const logger = createLogger();
+    const documentClient = DynamoDBDocumentClient.from(new DynamoDBClient({ region: config.awsRegion }));
     const sender = new KapsoClient({
       baseUrl: config.kapsoApiBaseUrl,
       apiKey: config.kapsoApiKey,
@@ -177,9 +198,12 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
     });
     cached = createProcessorHandler({
       responder: new Responder(sender),
-      logger,
-      routingCipher: routingCipherFromEnv(),
-      // analysisPipeline se inyecta cuando detection/domain lo exponga.
+      logger: createLogger(),
+      idempotency: new DynamoIdempotencyStore({
+        client: documentClient,
+        tableName: config.idempotencyTableName,
+      }),
+      // PR-06 inyectara AnalysisService; hasta entonces el record se reintenta.
     });
   }
   return cached(event);

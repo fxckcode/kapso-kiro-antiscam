@@ -75,6 +75,15 @@ export class AntiScamBotStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    /* --------------------------- IdempotencyTable --------------------------- */
+    // PK = messageId opaco. Evita publicar/responder dos veces ante reintentos.
+    const idempotencyTable = new dynamodb.Table(this, 'IdempotencyTable', {
+      partitionKey: { name: 'messageId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     /* --------------------- KMS routing token (opcional) ----------------------- */
     // Solo se crea si antiscambot:enableRoutingToken = true. Por defecto NO existe.
     const enableRoutingToken =
@@ -105,12 +114,15 @@ export class AntiScamBotStack extends cdk.Stack {
       | string
       | undefined;
 
-    const baseEnv: Record<string, string> = {
+    const webhookBaseEnv: Record<string, string> = {
       LOG_LEVEL: ctx('antiscambot:logLevel', 'info'),
+    };
+    const processorBaseEnv: Record<string, string> = {
+      ...webhookBaseEnv,
       KAPSO_API_BASE_URL: ctx('antiscambot:kapsoApiBaseUrl', 'https://api.kapso.ai/meta/whatsapp/v24.0'),
       // ARNs de secretos (ver TODO del resolutor de secretos arriba).
       KAPSO_API_KEY_ARN: kapsoApiKey.secretArn,
-      // Necesario para enviar por Kapso (webhook onboarding + processor).
+      // Solo LambdaProcessor necesita el identificador para enviar por Kapso.
       ...(kapsoPhoneNumberId ? { KAPSO_PHONE_NUMBER_ID: kapsoPhoneNumberId } : {}),
     };
 
@@ -125,24 +137,22 @@ export class AntiScamBotStack extends cdk.Stack {
       projectRoot,
       bundling: commonBundling,
       environment: {
-        ...baseEnv,
+        ...webhookBaseEnv,
         SQS_QUEUE_URL: analysisQueue.queueUrl,
+        IDEMPOTENCY_TABLE_NAME: idempotencyTable.tableName,
         MESSAGE_MAX_LENGTH: ctx('antiscambot:messageMaxLength', '4096'),
         DEFAULT_LOCALE: ctx('antiscambot:defaultLocale', 'es'),
         KAPSO_SIGNATURE_HEADER: ctx('antiscambot:kapsoSignatureHeader', 'x-webhook-signature'),
         KAPSO_WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
         USER_ID_HMAC_SECRET_ARN: userIdHmacSecret.secretArn,
-        CONSENT_TABLE_NAME: consentTable.tableName,
-        CONSENT_TTL_DAYS: ctx('antiscambot:consentTtlDays', '30'),
       },
     });
 
-    // IAM minimo: publicar en la cola, leer secretos y leer/escribir consentimiento.
+    // IAM minimo: publicar en la cola, leer secretos y llevar idempotencia.
     analysisQueue.grantSendMessages(webhookFn);
     webhookSecret.grantRead(webhookFn);
     userIdHmacSecret.grantRead(webhookFn);
-    kapsoApiKey.grantRead(webhookFn); // onboarding sale por Kapso
-    consentTable.grantReadWriteData(webhookFn);
+    idempotencyTable.grantReadWriteData(webhookFn);
 
     /* ----------------------------- LambdaProcessor ---------------------------- */
     const processorFn = new NodejsFunction(this, 'ProcessorFn', {
@@ -157,11 +167,13 @@ export class AntiScamBotStack extends cdk.Stack {
       projectRoot,
       bundling: commonBundling,
       environment: {
-        ...baseEnv,
+        ...processorBaseEnv,
+        IDEMPOTENCY_TABLE_NAME: idempotencyTable.tableName,
       },
     });
 
     kapsoApiKey.grantRead(processorFn);
+    idempotencyTable.grantReadWriteData(processorFn);
 
     // Routing token opcional: si esta habilitado, cablea la KMS key y los env.
     if (routingKey !== undefined) {
@@ -224,6 +236,7 @@ export class AntiScamBotStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AnalysisQueueUrl', { value: analysisQueue.queueUrl });
     new cdk.CfnOutput(this, 'DlqUrl', { value: dlq.queueUrl });
     new cdk.CfnOutput(this, 'ConsentTableName', { value: consentTable.tableName });
+    new cdk.CfnOutput(this, 'IdempotencyTableName', { value: idempotencyTable.tableName });
     new cdk.CfnOutput(this, 'WebhookSecretArn', { value: webhookSecret.secretArn });
     new cdk.CfnOutput(this, 'UserIdHmacSecretArn', { value: userIdHmacSecret.secretArn });
     new cdk.CfnOutput(this, 'KapsoApiKeyArn', { value: kapsoApiKey.secretArn });

@@ -5,9 +5,15 @@
  * el evento que va a SQS (src/queue/events.ts). El texto crudo aqui presente
  * SOLO existe en memoria de la LambdaWebhook y nunca se propaga ni loguea.
  */
-import type { MediaReference } from '../queue/events';
-
 export type NormalizedContentType = 'text' | 'image';
+
+/** Media queda fuera del evento de demo; esta referencia nunca cruza SQS. */
+export interface MediaReference {
+  readonly referenceId: string;
+  readonly mimeType: string;
+  readonly storageKey: string;
+  readonly sha256?: string;
+}
 
 /** Mensaje entrante ya normalizado, antes de redaccion/sanitizacion. */
 export interface NormalizedInboundMessage {
@@ -39,8 +45,8 @@ export interface OutboundMessage {
 
 /**
  * Puerto de envio de mensajes por WhatsApp (via Kapso).
- * Lo implementa src/kapso/client.ts. La LambdaWebhook lo usa para onboarding y
- * la LambdaProcessor (via responder) para el veredicto.
+ * Lo implementa src/kapso/client.ts. Solo LambdaProcessor (via responder) lo
+ * usa para enviar un resultado de analisis; LambdaWebhook no envia mensajes.
  */
 export interface WhatsAppSender {
   sendText(to: string, body: string): Promise<void>;

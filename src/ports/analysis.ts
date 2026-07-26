@@ -7,7 +7,7 @@
  *
  * Este frente (Kapso) solo consume el resultado para responder por WhatsApp.
  */
-import type { AnalysisRequestedEvent } from '../queue/events';
+import type { SafeUrlReference } from '../queue/events';
 
 export type Verdict = 'scam' | 'suspicious' | 'insufficient_information' | 'likely_legitimate';
 
@@ -31,6 +31,17 @@ export interface AnalysisResult {
   readonly needsMoreInformation: boolean;
 }
 
-export interface AnalysisPipeline {
-  analyze(event: AnalysisRequestedEvent): Promise<AnalysisResult>;
+/**
+ * Puerto que el modulo de analisis real (PR-06) implementara. Este repositorio
+ * no crea ni duplica el agente: solo inyecta el servicio en LambdaProcessor.
+ */
+export interface AnalysisService {
+  analyze(input: {
+    readonly executionId: string;
+    readonly redactedText: string;
+    readonly urlReferences: readonly SafeUrlReference[];
+  }): Promise<{
+    readonly status: 'success' | 'fallback' | 'retryable_error';
+    readonly result?: unknown;
+  }>;
 }

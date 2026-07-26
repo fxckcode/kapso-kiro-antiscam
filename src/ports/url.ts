@@ -10,10 +10,8 @@
  * src/messaging/url-fallback.ts.
  */
 export interface SanitizedUrl {
-  /** URL normalizada y validada. */
-  readonly sanitizedUrl: string;
-  /** Dominio (host) extraido. */
-  readonly domain: string;
+  /** URL canonica para reputacion, sin query, fragmento ni credenciales. */
+  readonly reputationUrl: string;
 }
 
 export interface UrlSanitizer {
