@@ -38,6 +38,10 @@ export interface AnalysisResult {
 export interface AnalysisService {
   analyze(input: {
     readonly executionId: string;
+    /** Identidad original del mensaje SQS; la usa el resultado de dominio. */
+    readonly messageId: string;
+    /** Seudonimo del remitente, nunca el telefono en claro. */
+    readonly userId: string;
     readonly redactedText: string;
     readonly urlReferences: readonly SafeUrlReference[];
   }): Promise<{

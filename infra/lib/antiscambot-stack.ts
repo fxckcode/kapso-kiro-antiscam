@@ -10,6 +10,7 @@ import * as secrets from 'aws-cdk-lib/aws-secretsmanager';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as kms from 'aws-cdk-lib/aws-kms';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as iam from 'aws-cdk-lib/aws-iam';
 
 /**
  * Stack del MVP: ingreso (API Gateway + LambdaWebhook), cola (SQS + DLQ) y
@@ -119,6 +120,15 @@ export class AntiScamBotStack extends cdk.Stack {
     };
     const processorBaseEnv: Record<string, string> = {
       ...webhookBaseEnv,
+      // No hay modelo fijo en codigo: el valor debe llegar por contexto/CDK
+      // antes de desplegar. `replace_me` produce un fallback seguro, no una
+      // llamada valida a Bedrock.
+      BEDROCK_MODEL_ID: ctx('antiscambot:bedrockModelId', 'replace_me'),
+      AWS_REGION: this.region,
+      AGENT_TIMEOUT_MS: ctx('antiscambot:agentTimeoutMs', '20000'),
+      // Mientras no exista un transporte VirusTotal auditado, PR-04 degrada la
+      // consulta de reputacion y el agente continua con reglas/casos conocidos.
+      VIRUSTOTAL_ENABLED: ctx('antiscambot:virustotalEnabled', 'false'),
       KAPSO_API_BASE_URL: ctx('antiscambot:kapsoApiBaseUrl', 'https://api.kapso.ai/meta/whatsapp/v24.0'),
       // ARNs de secretos (ver TODO del resolutor de secretos arriba).
       KAPSO_API_KEY_ARN: kapsoApiKey.secretArn,
@@ -174,6 +184,14 @@ export class AntiScamBotStack extends cdk.Stack {
 
     kapsoApiKey.grantRead(processorFn);
     idempotencyTable.grantReadWriteData(processorFn);
+    // El modelo o inference profile se decide por contexto antes del deploy.
+    // La politica se debe acotar a ese recurso al fijar el modelo de produccion.
+    processorFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      }),
+    );
 
     // Routing token opcional: si esta habilitado, cablea la KMS key y los env.
     if (routingKey !== undefined) {

@@ -29,12 +29,17 @@ export interface ProcessorConfig {
   readonly awsRegion: string;
   readonly kapsoApiBaseUrl: string;
   readonly idempotencyTableName: string;
+  /** Presupuesto total del agente, menor que el timeout de LambdaProcessor. */
+  readonly agentTimeoutMs: number;
   /** API key para responder por Kapso. */
   readonly kapsoApiKey: string;
   readonly kapsoPhoneNumberId: string | undefined;
 }
 
 const DEFAULT_MESSAGE_MAX_LENGTH = 4096;
+const DEFAULT_AGENT_TIMEOUT_MS = 20_000;
+const MIN_AGENT_TIMEOUT_MS = 1_000;
+const MAX_AGENT_TIMEOUT_MS = 25_000;
 // Kapso firma los webhooks (kind "kapso") en el header x-webhook-signature.
 const DEFAULT_SIGNATURE_HEADER = 'x-webhook-signature';
 const DEFAULT_LOCALE = 'es';
@@ -71,6 +76,13 @@ export async function loadProcessorConfig(
     awsRegion: required(env, 'AWS_REGION'),
     kapsoApiBaseUrl: required(env, 'KAPSO_API_BASE_URL'),
     idempotencyTableName: required(env, 'IDEMPOTENCY_TABLE_NAME'),
+    agentTimeoutMs: boundedInt(
+      env['AGENT_TIMEOUT_MS'],
+      DEFAULT_AGENT_TIMEOUT_MS,
+      MIN_AGENT_TIMEOUT_MS,
+      MAX_AGENT_TIMEOUT_MS,
+      'AGENT_TIMEOUT_MS',
+    ),
     kapsoApiKey,
     kapsoPhoneNumberId: env['KAPSO_PHONE_NUMBER_ID'],
   };
@@ -88,4 +100,22 @@ function intOr(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function boundedInt(
+  value: string | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+  key: string,
+): number {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value)) {
+    throw new Error(`Invalid environment variable: ${key}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+    throw new Error(`Invalid environment variable: ${key}`);
+  }
+  return parsed;
 }

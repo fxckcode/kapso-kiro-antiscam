@@ -8,6 +8,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
 import { KapsoClient, KapsoSendError } from '../kapso/client';
+import { createAntiScamAnalysisService } from '../analysis/antiscam-analysis-service';
 import { Responder } from '../messaging/responder';
 import type { AnalysisResult, AnalysisService } from '../ports/analysis';
 import { DynamoIdempotencyStore } from '../queue/dynamo-idempotency-store';
@@ -85,6 +86,8 @@ async function processRecord(record: SQSRecord, deps: ProcessorDeps): Promise<Re
   try {
     analysis = await deps.analysisService.analyze({
       executionId: analysisEvent.executionId,
+      messageId: analysisEvent.messageId,
+      userId: analysisEvent.userId,
       redactedText: analysisEvent.redactedText,
       urlReferences: analysisEvent.urlReferences,
     });
@@ -203,7 +206,9 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
         client: documentClient,
         tableName: config.idempotencyTableName,
       }),
-      // PR-06 inyectara AnalysisService; hasta entonces el record se reintenta.
+      analysisService: createAntiScamAnalysisService({
+        agentTimeoutMs: config.agentTimeoutMs,
+      }),
     });
   }
   return cached(event);

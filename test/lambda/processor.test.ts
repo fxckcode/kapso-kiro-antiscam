@@ -83,6 +83,8 @@ describe('processor handler', () => {
     expect((await handler(sqsEvent([record(JSON.stringify(validEvent()))]))).batchItemFailures).toEqual([]);
     expect(analysis.analyze).toHaveBeenCalledWith({
       executionId: 'exec-0123456789abcdef0123456789abcdef',
+      messageId: 'wamid.1',
+      userId: 'hash-1',
       redactedText: 'hola',
       urlReferences: [],
     });
