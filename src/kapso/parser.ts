@@ -100,7 +100,10 @@ function parseMetaBody(json: Record<string, unknown>): ParsedWebhook {
             kind: 'message',
             message: validated,
             metadata: (v.metadata ?? {}) as KapsoMetadata,
-            ...(typeof v.conversation_id === 'string' ? { conversationId: v.conversation_id } : {}),
+            conversationId:
+              typeof v.conversation_id === 'string'
+                ? v.conversation_id
+                : validated.from,
           };
         }
       }

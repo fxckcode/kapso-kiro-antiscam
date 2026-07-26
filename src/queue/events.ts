@@ -28,7 +28,7 @@ export interface AnalysisRequestedEvent {
   readonly receivedAt: string;
 }
 
-const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:\-=]*$/;
 const MAX_ID_LENGTH = 128;
 const MAX_TEXT_LENGTH = 4096;
 const MAX_URL_LENGTH = 2048;

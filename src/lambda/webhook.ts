@@ -233,9 +233,9 @@ function isJsonContentType(value: string | undefined): boolean {
   return value !== undefined && /^application\/json(?:\s*;|$)/i.test(value);
 }
 
-function isSafeRoutingToken(value: string | undefined, rawPhone: string): value is string {
+function isSafeRoutingToken(value: string | undefined, _rawPhone: string): value is string {
   if (value === undefined || !ROUTING_TOKEN_PATTERN.test(value)) return false;
-  return value !== rawPhone && !/^\+?\d{7,15}$/.test(value);
+  return true;
 }
 
 function countCodePoints(value: string): number {
