@@ -1,0 +1,19 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "**/*.d.ts", "node_modules", "dist", "cdk.out"]
+  },
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "antiscambot:messageMaxLength": "4096",
+    "antiscambot:defaultLocale": "es",
+    "antiscambot:kapsoApiBaseUrl": "https://api.kapso.ai/meta/whatsapp/v24.0",
+    "antiscambot:kapsoSignatureHeader": "x-webhook-signature",
+    "antiscambot:consentTtlDays": "30",
+    "antiscambot:enableRoutingToken": "false",
+    "antiscambot:logLevel": "info"
+  }
+}

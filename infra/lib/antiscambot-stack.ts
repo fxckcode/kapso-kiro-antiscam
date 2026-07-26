@@ -1,0 +1,231 @@
+import * as path from 'node:path';
+import * as cdk from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
+import { SqsEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import * as apigw from 'aws-cdk-lib/aws-apigateway';
+import * as secrets from 'aws-cdk-lib/aws-secretsmanager';
+import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
+import * as kms from 'aws-cdk-lib/aws-kms';
+import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+
+/**
+ * Stack del MVP: ingreso (API Gateway + LambdaWebhook), cola (SQS + DLQ) y
+ * procesador asincrono (LambdaProcessor). Todo con IAM de minimo privilegio via
+ * grants. Reproducible y destruible con `cdk deploy` / `cdk destroy`.
+ *
+ * Estado (PRD §13):
+ *  1. [PENDIENTE DE CONFIRMAR] Si Kapso responde por `kapsoConversationId`
+ *     (enrutado por defecto) o exige el numero destino. La feature de ROUTING
+ *     TOKEN CIFRADO (KMS) ya esta implementada pero DESACTIVADA por defecto; se
+ *     habilita con el contexto `antiscambot:enableRoutingToken=true`. Nunca se
+ *     guarda el telefono en claro en SQS, logs ni DynamoDB.
+ *  2. [RESUELTO] Los secretos se pasan como *_ARN y los handlers los resuelven en
+ *     cold start via src/lambda/shared/secrets.ts (Secrets Manager GetSecretValue),
+ *     con fallback al valor directo en env para local/tests.
+ *  3. [RESUELTO] Consentimiento persistido en DynamoDB (ConsentTable) con TTL.
+ */
+export class AntiScamBotStack extends cdk.Stack {
+  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+    super(scope, id, props);
+
+    const ctx = <T extends string>(key: string, fallback: T): string =>
+      (this.node.tryGetContext(key) as string | undefined) ?? fallback;
+
+    // Raiz del repo (un nivel arriba de infra/), donde vive src/ y el lockfile.
+    const projectRoot = path.join(__dirname, '..', '..');
+    const lockFile = path.join(projectRoot, 'package-lock.json');
+
+    /* --------------------------------- Secrets -------------------------------- */
+    const webhookSecret = new secrets.Secret(this, 'KapsoWebhookSecret', {
+      description: 'Secreto para validar la firma del webhook de Kapso',
+    });
+    const userIdHmacSecret = new secrets.Secret(this, 'UserIdHmacSecret', {
+      description: 'Secreto HMAC para seudonimizar el telefono (userId)',
+    });
+    const kapsoApiKey = new secrets.Secret(this, 'KapsoApiKey', {
+      description: 'API key para enviar respuestas por Kapso',
+    });
+
+    /* ------------------------------- Cola + DLQ ------------------------------- */
+    const processorTimeout = cdk.Duration.seconds(30);
+
+    const dlq = new sqs.Queue(this, 'AnalysisDlq', {
+      retentionPeriod: cdk.Duration.days(14),
+      enforceSSL: true,
+    });
+
+    const analysisQueue = new sqs.Queue(this, 'AnalysisQueue', {
+      // Visibility >= 6x el timeout de la Lambda (recomendacion AWS).
+      visibilityTimeout: cdk.Duration.seconds(processorTimeout.toSeconds() * 6),
+      retentionPeriod: cdk.Duration.days(4),
+      enforceSSL: true,
+      deadLetterQueue: { queue: dlq, maxReceiveCount: 3 },
+    });
+
+    /* ------------------------------ ConsentTable ------------------------------ */
+    // PK = userId (hash HMAC). TTL por atributo `ttl` (PRD §10). Solo estado, sin
+    // datos sensibles. RemovalPolicy DESTROY para poder limpiar tras el hackathon.
+    const consentTable = new dynamodb.Table(this, 'ConsentTable', {
+      partitionKey: { name: 'userId', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      timeToLiveAttribute: 'ttl',
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    /* --------------------- KMS routing token (opcional) ----------------------- */
+    // Solo se crea si antiscambot:enableRoutingToken = true. Por defecto NO existe.
+    const enableRoutingToken =
+      (this.node.tryGetContext('antiscambot:enableRoutingToken') as string | boolean | undefined) ===
+        true ||
+      this.node.tryGetContext('antiscambot:enableRoutingToken') === 'true';
+
+    let routingKey: kms.Key | undefined;
+    if (enableRoutingToken) {
+      routingKey = new kms.Key(this, 'RoutingTokenKey', {
+        description: 'Cifra el routing token (destino de respuesta) para AntiScamBot',
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+        enableKeyRotation: true,
+      });
+    }
+
+    /* ----------------------------- Config comun ------------------------------ */
+    const commonBundling = {
+      format: OutputFormat.CJS,
+      target: 'node20',
+      minify: true,
+      sourceMap: true,
+      // El runtime de Lambda (nodejs20) ya incluye AWS SDK v3.
+      externalModules: ['@aws-sdk/*'],
+    };
+
+    const kapsoPhoneNumberId = this.node.tryGetContext('antiscambot:kapsoPhoneNumberId') as
+      | string
+      | undefined;
+
+    const baseEnv: Record<string, string> = {
+      LOG_LEVEL: ctx('antiscambot:logLevel', 'info'),
+      KAPSO_API_BASE_URL: ctx('antiscambot:kapsoApiBaseUrl', 'https://api.kapso.ai/meta/whatsapp/v24.0'),
+      // ARNs de secretos (ver TODO del resolutor de secretos arriba).
+      KAPSO_API_KEY_ARN: kapsoApiKey.secretArn,
+      // Necesario para enviar por Kapso (webhook onboarding + processor).
+      ...(kapsoPhoneNumberId ? { KAPSO_PHONE_NUMBER_ID: kapsoPhoneNumberId } : {}),
+    };
+
+    /* ------------------------------ LambdaWebhook ----------------------------- */
+    const webhookFn = new NodejsFunction(this, 'WebhookFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(projectRoot, 'src', 'lambda', 'webhook.ts'),
+      handler: 'handler',
+      timeout: cdk.Duration.seconds(10),
+      memorySize: 256,
+      depsLockFilePath: lockFile,
+      projectRoot,
+      bundling: commonBundling,
+      environment: {
+        ...baseEnv,
+        SQS_QUEUE_URL: analysisQueue.queueUrl,
+        MESSAGE_MAX_LENGTH: ctx('antiscambot:messageMaxLength', '4096'),
+        DEFAULT_LOCALE: ctx('antiscambot:defaultLocale', 'es'),
+        KAPSO_SIGNATURE_HEADER: ctx('antiscambot:kapsoSignatureHeader', 'x-webhook-signature'),
+        KAPSO_WEBHOOK_SECRET_ARN: webhookSecret.secretArn,
+        USER_ID_HMAC_SECRET_ARN: userIdHmacSecret.secretArn,
+        CONSENT_TABLE_NAME: consentTable.tableName,
+        CONSENT_TTL_DAYS: ctx('antiscambot:consentTtlDays', '30'),
+      },
+    });
+
+    // IAM minimo: publicar en la cola, leer secretos y leer/escribir consentimiento.
+    analysisQueue.grantSendMessages(webhookFn);
+    webhookSecret.grantRead(webhookFn);
+    userIdHmacSecret.grantRead(webhookFn);
+    kapsoApiKey.grantRead(webhookFn); // onboarding sale por Kapso
+    consentTable.grantReadWriteData(webhookFn);
+
+    /* ----------------------------- LambdaProcessor ---------------------------- */
+    const processorFn = new NodejsFunction(this, 'ProcessorFn', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      entry: path.join(projectRoot, 'src', 'lambda', 'processor.ts'),
+      handler: 'handler',
+      timeout: processorTimeout,
+      memorySize: 512,
+      // Concurrencia reservada para controlar costos y proteger cuotas (PRD §11).
+      reservedConcurrentExecutions: 5,
+      depsLockFilePath: lockFile,
+      projectRoot,
+      bundling: commonBundling,
+      environment: {
+        ...baseEnv,
+      },
+    });
+
+    kapsoApiKey.grantRead(processorFn);
+
+    // Routing token opcional: si esta habilitado, cablea la KMS key y los env.
+    if (routingKey !== undefined) {
+      routingKey.grantEncrypt(webhookFn);
+      routingKey.grantDecrypt(processorFn);
+      for (const fn of [webhookFn, processorFn]) {
+        fn.addEnvironment('ENABLE_ROUTING_TOKEN', 'true');
+        fn.addEnvironment('ROUTING_TOKEN_KMS_KEY_ID', routingKey.keyArn);
+      }
+    }
+
+    // reportBatchItemFailures: solo los records fallidos se reintentan.
+    processorFn.addEventSource(
+      new SqsEventSource(analysisQueue, {
+        batchSize: 5,
+        maxBatchingWindow: cdk.Duration.seconds(5),
+        reportBatchItemFailures: true,
+      }),
+    );
+
+    /* ------------------------------- API Gateway ------------------------------ */
+    const api = new apigw.RestApi(this, 'WebhookApi', {
+      restApiName: 'antiscambot-webhook',
+      description: 'Endpoint de ingreso del webhook de Kapso',
+      deployOptions: { stageName: 'prod', throttlingRateLimit: 20, throttlingBurstLimit: 40 },
+    });
+    const webhookResource = api.root.addResource('webhook');
+    webhookResource.addMethod('POST', new apigw.LambdaIntegration(webhookFn));
+
+    /* --------------------------------- Alarmas -------------------------------- */
+    new cloudwatch.Alarm(this, 'DlqNotEmptyAlarm', {
+      alarmDescription: 'Hay mensajes en la DLQ de analisis',
+      metric: dlq.metricApproximateNumberOfMessagesVisible({ period: cdk.Duration.minutes(1) }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    new cloudwatch.Alarm(this, 'WebhookErrorsAlarm', {
+      alarmDescription: 'Errores en la LambdaWebhook',
+      metric: webhookFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    new cloudwatch.Alarm(this, 'ProcessorErrorsAlarm', {
+      alarmDescription: 'Errores en la LambdaProcessor',
+      metric: processorFn.metricErrors({ period: cdk.Duration.minutes(5) }),
+      threshold: 5,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+
+    /* --------------------------------- Outputs -------------------------------- */
+    new cdk.CfnOutput(this, 'WebhookUrl', { value: `${api.url}webhook` });
+    new cdk.CfnOutput(this, 'AnalysisQueueUrl', { value: analysisQueue.queueUrl });
+    new cdk.CfnOutput(this, 'DlqUrl', { value: dlq.queueUrl });
+    new cdk.CfnOutput(this, 'ConsentTableName', { value: consentTable.tableName });
+    new cdk.CfnOutput(this, 'WebhookSecretArn', { value: webhookSecret.secretArn });
+    new cdk.CfnOutput(this, 'UserIdHmacSecretArn', { value: userIdHmacSecret.secretArn });
+    new cdk.CfnOutput(this, 'KapsoApiKeyArn', { value: kapsoApiKey.secretArn });
+  }
+}
