@@ -173,8 +173,6 @@ export class AntiScamBotStack extends cdk.Stack {
       handler: 'handler',
       timeout: processorTimeout,
       memorySize: 512,
-      // Concurrencia reservada para controlar costos y proteger cuotas (PRD §11).
-      reservedConcurrentExecutions: 5,
       depsLockFilePath: lockFile,
       projectRoot,
       bundling: commonBundling,
@@ -222,6 +220,7 @@ export class AntiScamBotStack extends cdk.Stack {
     });
     const webhookResource = api.root.addResource('webhook');
     webhookResource.addMethod('POST', new apigw.LambdaIntegration(webhookFn));
+    webhookResource.addMethod('GET', new apigw.LambdaIntegration(webhookFn));
 
     /* --------------------------------- Alarmas -------------------------------- */
     new cloudwatch.Alarm(this, 'DlqNotEmptyAlarm', {

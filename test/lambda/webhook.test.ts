@@ -94,9 +94,10 @@ describe('webhook handler', () => {
 
   it('requires POST and application/json', async () => {
     const handler = createWebhookHandler(h.deps);
+    // GET without proper verification query params = 400
     const wrongMethod = buildEvent(textBody('hola'));
     wrongMethod.httpMethod = 'GET';
-    expect((await handler(wrongMethod)).statusCode).toBe(405);
+    expect((await handler(wrongMethod)).statusCode).toBe(400);
 
     const wrongType = buildEvent(textBody('hola'));
     wrongType.headers = { ...wrongType.headers, 'content-type': 'text/plain' };

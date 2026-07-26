@@ -49,6 +49,25 @@ export function createWebhookHandler(deps: WebhookDeps) {
   };
 
   return async function handler(event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> {
+    // GET = verification de webhook (WhatsApp Cloud API / Meta)
+    if (event.httpMethod === 'GET') {
+      const query = event.queryStringParameters ?? {};
+      if (query['hub.mode'] === 'subscribe') {
+        const expectedToken = config.webhookSecret;
+        const receivedToken = query['hub.verify_token'] ?? '';
+        if (receivedToken === expectedToken) {
+          logger.info('webhook verified via GET challenge');
+          return {
+            statusCode: 200,
+            headers: { 'content-type': 'text/plain' },
+            body: query['hub.challenge'] ?? 'ok',
+          };
+        }
+        logger.warn('webhook verify token mismatch');
+        return respond(403, 'forbidden');
+      }
+      return respond(400, 'invalid_verify_request');
+    }
     if (event.httpMethod !== 'POST') return respond(405, 'method_not_allowed');
 
     const headers = normalizeHeaders(event.headers);
