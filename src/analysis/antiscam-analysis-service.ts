@@ -39,7 +39,9 @@ export function createAntiScamAnalysisService(
   const provider = createDisabledReputationProvider();
   const cache = createInMemoryReputationCache({ now: () => Date.now() });
 
-  return Object.freeze({
+  // El argumento de tipo explicito es necesario: sin el, `Object.freeze` no
+  // propaga el contexto de `AnalysisService` al literal y `input` queda `any`.
+  return Object.freeze<AnalysisService>({
     async analyze(input) {
       // Redactar otra vez es intencionalmente idempotente: el texto ya llega
       // sanitizado desde SQS, pero esta frontera no confia en una marca de tipo.

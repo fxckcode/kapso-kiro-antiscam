@@ -124,7 +124,9 @@ export class AntiScamBotStack extends cdk.Stack {
       // antes de desplegar. `replace_me` produce un fallback seguro, no una
       // llamada valida a Bedrock.
       BEDROCK_MODEL_ID: ctx('antiscambot:bedrockModelId', 'replace_me'),
-      AWS_REGION: this.region,
+      // `AWS_REGION` no se declara aqui: es una variable reservada que el
+      // runtime de Lambda inyecta con la region de la funcion. Fijarla a mano
+      // hace fallar el synth y su valor seria identico a `this.region`.
       AGENT_TIMEOUT_MS: ctx('antiscambot:agentTimeoutMs', '20000'),
       // Mientras no exista un transporte VirusTotal auditado, PR-04 degrada la
       // consulta de reputacion y el agente continua con reglas/casos conocidos.
