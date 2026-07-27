@@ -3,6 +3,7 @@ import {
   buildAnalysisResult,
   buildCautiousResult,
 } from "../domain/analysis-result.js";
+import type { Signal } from "../domain/signal.js";
 import {
   createAnalysisExecutionContext,
   snapshotEvidence,
@@ -31,6 +32,8 @@ export interface AnalyzeWithAgentOptions {
   readonly messageId: string;
   readonly userId: string;
   readonly limitsOverrides?: AgentLimitsOverrides;
+  /** Senales detectadas por reglas antes de la invocacion del agente. */
+  readonly inputSignals?: readonly Signal[];
 }
 
 /**
@@ -168,6 +171,21 @@ function buildFallbackOutcome(
       messageId: options.messageId,
       userId: options.userId,
       createdAt: deps.now(),
+      ...(options.inputSignals !== undefined ? { signals: options.inputSignals } : {}),
+      shortExplanation: buildFallbackExplanation(options.inputSignals),
     }),
   };
+}
+
+/** Construye una explicacion contextual incluso cuando el agente falla. */
+function buildFallbackExplanation(signals?: readonly Signal[]): string {
+  if (!signals || signals.length === 0) {
+    return "No pudimos completar el analisis con seguridad. Trata el mensaje con precaucion.";
+  }
+  const descs = signals.map((s) => s.description.toLowerCase());
+  return (
+    "Detectamos señales que requieren atencion: " +
+    descs.join("; ") +
+    ". No pudimos completar el analisis automatico, pero estas señales son indicadores de riesgo."
+  );
 }

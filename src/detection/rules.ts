@@ -210,6 +210,37 @@ export const DEFAULT_RULES: readonly DetectionRule[] = [
     weight: 30,
     matches: (t) => looksLikeBrandLookalike(hostsIn(t)),
   },
+  {
+    type: "nonsense_domain",
+    description:
+      "El dominio contiene subcadenas sin sentido: caracteres repetidos o secuencias largas sin vocales.",
+    weight: 20,
+    matches: (t) => {
+      const REPEATED_CHARS = /([a-z])\1{3,}/;
+      const CONSONANT_RUN = /[bcdfghjklmnpqrstvwxyz]{8,}/;
+      return hostsIn(t).some(
+        (host) => REPEATED_CHARS.test(host) || CONSONANT_RUN.test(host),
+      );
+    },
+  },
+  {
+    type: "tracking_url",
+    description:
+      "Contiene un enlace con parámetros de rastreo excesivos que pueden ocultar el propósito real.",
+    weight: 15,
+    matches: (t) => {
+      const TRACKING_PARAMS = /(utm_source|utm_medium|utm_campaign|utm_term|utm_content|gclid|fbclid|qclid|qad_source)/;
+      const MAX_TRACKING = 2;
+      const urls = t.match(/https?:\/\/[^\s]+/g) ?? [];
+      return urls.some((url) => {
+        const qmark = url.indexOf("?");
+        if (qmark === -1) return false;
+        const query = url.slice(qmark + 1).split("&");
+        const trackingCount = query.filter((p) => TRACKING_PARAMS.test(p)).length;
+        return trackingCount > MAX_TRACKING;
+      });
+    },
+  },
 ];
 
 /**

@@ -34,21 +34,15 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
         return { kind: 'reply', text: replies[Math.floor(Math.random() * replies.length)] as string };
       }
 
-      // Si hay senales de riesgo, analizar y responder directamente.
+      // Si hay señales de riesgo, enviar feedback inmediato y pasar a análisis completo.
       if (signals.length > 0) {
         await deps.responder.respondWithText(
           event.routingToken,
           '⏳ Analizando el mensaje... Esto toma solo unos segundos.',
           event.messageId,
         );
-
-        const signalDescriptions = signals.map((s) => s.description).join(', ');
-        const reply =
-          `⚠️ Se detectaron señales de riesgo.\n\n` +
-          `• ${signalDescriptions}\n\n` +
-          `Recomendación: No compartas información personal ni hagas clic en enlaces sospechosos. ` +
-          `Verifica la identidad del remitente por un canal oficial.`;
-        return { kind: 'reply', text: reply };
+        // Pasar al análisis completo (Bedrock) para obtener veredicto detallado.
+        return { kind: 'needs_analysis' };
       }
 
       // Sin senales y sin saludo: pasar al analisis completo.

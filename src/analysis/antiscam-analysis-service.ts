@@ -99,6 +99,7 @@ export function createAntiScamAnalysisService(
         {
           messageId: input.messageId,
           userId: input.userId,
+          inputSignals: signals,
           ...(options.agentTimeoutMs === undefined
             ? {}
             : { limitsOverrides: { timeoutMs: options.agentTimeoutMs } }),
