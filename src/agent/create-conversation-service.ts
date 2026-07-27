@@ -16,7 +16,7 @@ export interface ConversationServiceDeps {
   readonly responder: Responder;
 }
 
-export function createConversationService(_deps: ConversationServiceDeps): ConversationService {
+export function createConversationService(deps: ConversationServiceDeps): ConversationService {
   return {
     async converse(event: AnalysisRequestedEvent): Promise<ConversationOutcome> {
       const redacted = redact(event.redactedText).text;
@@ -34,19 +34,33 @@ export function createConversationService(_deps: ConversationServiceDeps): Conve
         return { kind: 'reply', text: replies[Math.floor(Math.random() * replies.length)] as string };
       }
 
-      // Si hay senales de riesgo, enviar feedback inmediato al usuario
-      // y luego pasar al analisis completo. Dos mensajes es el comportamiento
-      // esperado: feedback instantaneo + analisis detallado.
+      // Si hay señales de riesgo detectadas por reglas, generar respuesta
+      // directa sin esperar a Bedrock. Las reglas son deterministas y ya
+      // identificaron el problema.
       if (signals.length > 0) {
-        await _deps.responder.respondWithText(
-          event.routingToken,
-          '⏳ Analizando el mensaje... Esto toma solo unos segundos.',
-          event.messageId,
-        );
-        return { kind: 'needs_analysis' };
+        const sigDescriptions = signals.map((s) => s.description.toLowerCase());
+        const riskLevel =
+          signals.some((s) => s.weight >= 30) ? '⚠️ Cuidado:' :
+          signals.some((s) => s.weight >= 15) ? 'ℹ️ Precaución:' :
+          'ℹ️ Nota:';
+
+        const reply =
+          `${riskLevel} Se detectaron las siguientes señales de riesgo:\n\n` +
+          `• ${sigDescriptions.join('\n• ')}\n\n` +
+          `Recomendación: No compartas información personal, no hagas clic en enlaces ` +
+          `ni descargues archivos de fuentes no verificadas. ` +
+          `Verifica la identidad del remitente por un canal oficial.\n\n` +
+          `Esto es orientativo, no asesoramiento. Ante la duda, verifica por canales oficiales.\n` +
+          `Responde MAS INFO para ver el detalle.`;
+        return { kind: 'reply', text: reply };
       }
 
-      // Sin senales y sin saludo: pasar al analisis completo.
+      // Sin senales: enviar feedback y pasar al analisis completo (Bedrock).
+      await deps.responder.respondWithText(
+        event.routingToken,
+        '⏳ Analizando el mensaje... Esto toma solo unos segundos.',
+        event.messageId,
+      );
       return { kind: 'needs_analysis' };
     },
   };
