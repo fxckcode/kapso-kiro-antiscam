@@ -1,8 +1,3 @@
-/**
- * Adaptador entre el evento Kapso ya sanitizado y el nucleo aprobado de
- * AntiScamBot (reglas + PR-06). No contiene logica de agente ni transporte HTTP
- * de reputacion: ambas responsabilidades permanecen en los modulos copiados.
- */
 import { analyzeWithAgent } from "../agent/analyze-with-agent.js";
 import {
   buildBedrockProviderConfig,
@@ -13,6 +8,7 @@ import type { SafeUrlReference as DomainSafeUrlReference } from "../domain/analy
 import { redact } from "../domain/redaction.js";
 import type { AnalysisService } from "../ports/analysis";
 import { createInMemoryReputationCache } from "../reputation/cache.js";
+import { createVirusTotalProvider } from "../reputation/virustotal.js";
 import type { UrlReputationProvider, UrlReputationResult } from "../reputation/provider.js";
 import { rehydrateUrlAllowlist } from "../url/allowlist.js";
 import type { SafeUrlReference as QueueSafeUrlReference } from "../queue/events";
@@ -40,23 +36,51 @@ export interface AntiScamAnalysisServiceOptions {
 export function createAntiScamAnalysisService(
   options: AntiScamAnalysisServiceOptions = {},
 ): AnalysisService {
-  assertVirusTotalIsDisabled();
+  const vtEnabled = process.env["VIRUSTOTAL_ENABLED"] === "true";
 
   const now = options.now ?? (() => new Date().toISOString());
   const model = createBedrockProvider(buildBedrockProviderConfig());
-  const provider = createDisabledReputationProvider();
+  const provider: UrlReputationProvider = vtEnabled && process.env["VIRUSTOTAL_API_KEY"]
+    ? createVirusTotalProvider({
+        apiKey: process.env["VIRUSTOTAL_API_KEY"],
+        transport: async (req) => {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), req.timeoutMs);
+          try {
+            const resp = await fetch(`https://www.virustotal.com/api/v3/urls`, {
+              method: "POST",
+              headers: {
+                "x-apikey": req.apiKey,
+                "content-type": "application/x-www-form-urlencoded",
+              },
+              body: `url=${encodeURIComponent(req.url)}`,
+              signal: controller.signal,
+            });
+            const body = await resp.text();
+            const bytesRead = Buffer.byteLength(body, "utf8");
+            clearTimeout(timer);
+            return {
+              status: resp.status,
+              body,
+              bytesRead,
+              truncated: bytesRead > req.maxBytes,
+            };
+          } catch (err) {
+            clearTimeout(timer);
+            throw err;
+          }
+        },
+        timeoutMs: 5000,
+        maxBytes: 65536,
+      })
+    : createDisabledReputationProvider();
   const cache = createInMemoryReputationCache({ now: () => Date.now() });
 
-  // El argumento de tipo explicito es necesario: sin el, `Object.freeze` no
-  // propaga el contexto de `AnalysisService` al literal y `input` queda `any`.
   return Object.freeze<AnalysisService>({
     async analyze(input) {
-      // Redactar otra vez es intencionalmente idempotente: el texto ya llega
-      // sanitizado desde SQS, pero esta frontera no confia en una marca de tipo.
       const redactedText = redact(input.redactedText).text;
       const urlReferences = toDomainReferences(input.urlReferences);
 
-      // Saludos simples no requieren analisis con IA.
       const lower = redactedText.toLowerCase().trim();
       if (GREETINGS.some((re) => re.test(lower)) && urlReferences.length === 0) {
         return {
@@ -79,8 +103,6 @@ export function createAntiScamAnalysisService(
         };
       }
 
-      // Validacion explicita antes de crear el agente: un evento SQS alterado
-      // nunca llega a DNS, cache, proveedor ni modelo con una URL no enrutable.
       const allowlist = rehydrateUrlAllowlist(input.executionId, urlReferences);
       const signals = evaluateRules(redactedText);
 
@@ -109,7 +131,6 @@ export function createAntiScamAnalysisService(
   });
 }
 
-/** Copia estructural sin cast entre el contrato SQS y el contrato de dominio. */
 function toDomainReferences(
   references: readonly QueueSafeUrlReference[],
 ): readonly DomainSafeUrlReference[] {
@@ -125,11 +146,6 @@ function toDomainReferences(
   return Object.freeze(copied);
 }
 
-/**
- * El transporte productivo de VirusTotal no forma parte de esta integracion.
- * El estado degradado permite que el agente use reglas y casos conocidos sin
- * declarar que una URL es segura ni generar evidencia ficticia.
- */
 function createDisabledReputationProvider(): UrlReputationProvider {
   return Object.freeze({
     async check(_reputationUrl: string): Promise<UrlReputationResult> {
@@ -140,16 +156,4 @@ function createDisabledReputationProvider(): UrlReputationProvider {
       };
     },
   });
-}
-
-/**
- * No existe un adaptador HTTP seguro para VirusTotal en este repositorio. Si
- * alguien habilita la variable antes de implementarlo, fallar al iniciar es
- * preferible a enviar URLs a un transporte incompleto o simulado.
- */
-function assertVirusTotalIsDisabled(): void {
-  const configured = process.env["VIRUSTOTAL_ENABLED"];
-  if (configured !== undefined && configured !== "false") {
-    throw new Error("VIRUSTOTAL_ENABLED requiere un transporte de produccion auditado.");
-  }
 }

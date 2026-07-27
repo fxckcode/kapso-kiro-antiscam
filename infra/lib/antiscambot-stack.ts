@@ -133,6 +133,7 @@ export class AntiScamBotStack extends cdk.Stack {
       // Mientras no exista un transporte VirusTotal auditado, PR-04 degrada la
       // consulta de reputacion y el agente continua con reglas/casos conocidos.
       VIRUSTOTAL_ENABLED: ctx('antiscambot:virustotalEnabled', 'false'),
+      VIRUSTOTAL_API_KEY: ctx('antiscambot:virustotalApiKey', ''),
       KAPSO_API_BASE_URL: ctx('antiscambot:kapsoApiBaseUrl', 'https://api.kapso.ai/meta/whatsapp/v24.0'),
       // ARNs de secretos (ver TODO del resolutor de secretos arriba).
       KAPSO_API_KEY_ARN: kapsoApiKey.secretArn,
