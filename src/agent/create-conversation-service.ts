@@ -16,7 +16,7 @@ export interface ConversationServiceDeps {
   readonly responder: Responder;
 }
 
-export function createConversationService(deps: ConversationServiceDeps): ConversationService {
+export function createConversationService(_deps: ConversationServiceDeps): ConversationService {
   return {
     async converse(event: AnalysisRequestedEvent): Promise<ConversationOutcome> {
       const redacted = redact(event.redactedText).text;
@@ -34,14 +34,9 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
         return { kind: 'reply', text: replies[Math.floor(Math.random() * replies.length)] as string };
       }
 
-      // Si hay señales de riesgo, enviar feedback inmediato y pasar a análisis completo.
+      // Si hay señales de riesgo, pasar directamente al análisis completo
+      // sin enviar feedback intermedio para evitar duplicar respuestas.
       if (signals.length > 0) {
-        await deps.responder.respondWithText(
-          event.routingToken,
-          '⏳ Analizando el mensaje... Esto toma solo unos segundos.',
-          event.messageId,
-        );
-        // Pasar al análisis completo (Bedrock) para obtener veredicto detallado.
         return { kind: 'needs_analysis' };
       }
 
