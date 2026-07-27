@@ -12,6 +12,8 @@
 export interface SanitizedUrl {
   /** URL canonica para reputacion, sin query, fragmento ni credenciales. */
   readonly reputationUrl: string;
+  /** Indica si la URL original tenia parametros de rastreo (UTMs, gclid, etc). */
+  readonly hasTrackingParams?: boolean;
 }
 
 export interface UrlSanitizer {

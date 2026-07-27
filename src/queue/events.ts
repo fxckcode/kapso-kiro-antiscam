@@ -13,6 +13,8 @@ export const ANALYSIS_EVENT_TYPE = 'analysis_requested' as const;
 export interface SafeUrlReference {
   readonly referenceId: string;
   readonly reputationUrl: string;
+  /** Indica si la URL original tenia parametros de rastreo. */
+  readonly hasTrackingParams?: boolean;
 }
 
 export interface AnalysisRequestedEvent {

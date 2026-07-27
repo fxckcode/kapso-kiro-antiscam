@@ -36,9 +36,15 @@ export class FallbackUrlSanitizer implements UrlSanitizer {
     }
     if (hasEncodedDelimiter(url.pathname)) return null;
 
+    // Detectar tracking params ANTES de limpiar la URL
+    const searchParams = url.searchParams;
+    const hasTracking = Array.from(searchParams.entries()).some(
+      ([key]) => /^utm_|gclid|fbclid|qclid|gad_source|gad_campaignid/.test(key),
+    );
+
     url.search = '';
     url.hash = '';
-    return { reputationUrl: url.toString() };
+    return { reputationUrl: url.toString(), hasTrackingParams: hasTracking };
   }
 }
 

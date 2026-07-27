@@ -23,6 +23,16 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
       const signals = evaluateRules(redacted);
       const lower = event.redactedText.toLowerCase().trim();
 
+      // Tambien revisar urlReferences por parametros de rastreo
+      const hasTrackingRef = (event.urlReferences ?? []).some((ref) => ref.hasTrackingParams);
+      if (hasTrackingRef) {
+        signals.push({
+          type: "tracking_url",
+          description: "Contiene un enlace con parametros de rastreo excesivos que pueden ocultar el proposito real.",
+          weight: 15,
+        });
+      }
+
       // Saludos simples -> respuesta directa sin Bedrock.
       const greetingRe = /^(hola|ola|buenas?|hey|ey|qu[eé] (tal|hay|cuenta|c pasa)|c[oó]mo (est[áa]s|van)|q[uo]e se dice)\s*[.!]*$/i;
       if (greetingRe.test(lower)) {

@@ -176,7 +176,7 @@ export function sanitizeMessageUrlsForQueue(
     queueText = queueText.replaceAll(candidate, replacement);
     if (sanitized !== null && !seenUrls.has(sanitized.reputationUrl)) {
       seenUrls.add(sanitized.reputationUrl);
-      references.push({ referenceId: `url-${references.length}`, reputationUrl: sanitized.reputationUrl });
+      references.push({ referenceId: `url-${references.length}`, reputationUrl: sanitized.reputationUrl, ...(sanitized.hasTrackingParams === true ? { hasTrackingParams: true } : {}) });
     }
   }
 
