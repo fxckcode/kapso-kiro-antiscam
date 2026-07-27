@@ -82,6 +82,32 @@ async function processRecord(record: SQSRecord, deps: ProcessorDeps): Promise<Re
     return 'retry';
   }
 
+  // Saludos y conversacion simple: responder sin gastar Bedrock.
+  const text = (analysisEvent.redactedText ?? '').toLowerCase().trim();
+  const greetingPattern = /^(hola|ola|buenas?|hey|ey|qu[eé] (tal|hay|cuenta|c pasa)|c[oó]mo (est[áa]s|van)|q[uo]e se dice)\s*[.!]*$/i;
+  if (greetingPattern.test(text)) {
+    const greetings = [
+      '¡Hola! 👋 Soy el asistente AntiScamBot. ¿Tenés algún mensaje sospechoso que quieras que verifique?',
+      '¡Hola! ¿Cómo estás? En qué puedo ayudarte con la seguridad hoy?',
+      '¡Buenas! Si recibiste un mensaje raro, reenviámelo y lo analizo para vos.',
+      '¡Hola! Acordate: no compartas códigos ni claves con nadie. Si querés, verifico un mensaje por vos.',
+    ];
+    const response = greetings[Math.floor(Math.random() * greetings.length)] as string;
+    await deps.responder.respondWithText(analysisEvent.routingToken, response, analysisEvent.messageId as string);
+    logger.info('greeting response sent', { userId: analysisEvent.userId, messageId: analysisEvent.messageId });
+    return 'done';
+  }
+
+  // "MAS INFO" o "más info": responder con detalles del analisis previo.
+  if (/^m[áa]s\s+info$/i.test(text) || /^detalles?$/i.test(text)) {
+    const response =
+      'ℹ️ El analisis completo requiere que reenviés el mensaje sospechoso. ' +
+      'Mandame el mensaje que quieras verificar y lo analizo al instante.';
+    await deps.responder.respondWithText(analysisEvent.routingToken, response, analysisEvent.messageId);
+    logger.info('info response sent', { userId: analysisEvent.userId, messageId: analysisEvent.messageId });
+    return 'done';
+  }
+
   let analysis: Awaited<ReturnType<AnalysisService['analyze']>>;
   try {
     analysis = await deps.analysisService.analyze({

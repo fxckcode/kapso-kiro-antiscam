@@ -65,6 +65,7 @@ export class KapsoClient implements WhatsAppSender {
         : `${this.baseUrl}/messages`;
       let response: Response;
       try {
+        console.log('kapso request', { url, apiKeyPrefix: this.apiKey.slice(0, 8) + '...', payload: JSON.stringify(payload).slice(0, 200) });
         response = await this.fetchImpl(url, {
           method: 'POST',
           headers: {

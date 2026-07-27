@@ -128,7 +128,7 @@ describe('webhook handler', () => {
     expect(published.urlReferences).toEqual([
       { referenceId: 'url-0', reputationUrl: 'https://trusted.example/path' },
     ]);
-    expect(published.routingToken).toBe('conv-1');
+    expect(published.routingToken).toBe('5491100000000');
   });
 
   it('does not republish a duplicate message', async () => {

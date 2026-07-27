@@ -18,7 +18,7 @@ function validEvent(overrides: Partial<AnalysisRequestedEvent> = {}): AnalysisRe
     messageId: 'wamid.1',
     userId: 'hash-1',
     routingToken: 'conv-1',
-    redactedText: 'hola',
+    redactedText: 'clave de verificacion',
     urlReferences: [],
     receivedAt: new Date().toISOString(),
     ...overrides,
@@ -85,7 +85,7 @@ describe('processor handler', () => {
       executionId: 'exec-0123456789abcdef0123456789abcdef',
       messageId: 'wamid.1',
       userId: 'hash-1',
-      redactedText: 'hola',
+      redactedText: 'clave de verificacion',
       urlReferences: [],
     });
     expect(sendText).toHaveBeenCalledOnce();

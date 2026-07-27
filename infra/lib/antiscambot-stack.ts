@@ -40,8 +40,10 @@ export class AntiScamBotStack extends cdk.Stack {
     const lockFile = path.join(projectRoot, 'package-lock.json');
 
     /* --------------------------------- Secrets -------------------------------- */
+    const webhookSecretValue = this.node.tryGetContext('antiscambot:webhookSecret') as string | undefined;
     const webhookSecret = new secrets.Secret(this, 'KapsoWebhookSecret', {
       description: 'Secreto para validar la firma del webhook de Kapso',
+      ...(webhookSecretValue ? { secretStringValue: cdk.SecretValue.unsafePlainText(webhookSecretValue) } : {}),
     });
     const userIdHmacSecret = new secrets.Secret(this, 'UserIdHmacSecret', {
       description: 'Secreto HMAC para seudonimizar el telefono (userId)',

@@ -17,6 +17,14 @@ import type { UrlReputationProvider, UrlReputationResult } from "../reputation/p
 import { rehydrateUrlAllowlist } from "../url/allowlist.js";
 import type { SafeUrlReference as QueueSafeUrlReference } from "../queue/events";
 
+/** Saludos simples en espanol que no requieren analisis con IA. */
+const GREETINGS = [
+  /^(hola|ola|alo|aló|buenas?|hey|ey|he?y\b)\s*[.!]*$/i,
+  /^(buenos?\s+d[ií]as|buenas?\s+tardes|buenas?\s+noches)\s*[.!]*$/i,
+  /^(qu[eé] (tal|hay|cuenta|c pasa| paso)|cómo\s+(est[áa]s|van\s*l[oa]s|and[aá]s)|como\s+estas)\s*[.!?]*$/i,
+  /^(q[uo]e\s+dice[s]?|q[uo]e\s+se\s+dice[s]?)\s*[.!?]*$/i,
+];
+
 export interface AntiScamAnalysisServiceOptions {
   /** Reloj inyectable para pruebas; nunca almacena estado por ejecucion. */
   readonly now?: () => string;
@@ -47,6 +55,29 @@ export function createAntiScamAnalysisService(
       // sanitizado desde SQS, pero esta frontera no confia en una marca de tipo.
       const redactedText = redact(input.redactedText).text;
       const urlReferences = toDomainReferences(input.urlReferences);
+
+      // Saludos simples no requieren analisis con IA.
+      const lower = redactedText.toLowerCase().trim();
+      if (GREETINGS.some((re) => re.test(lower)) && urlReferences.length === 0) {
+        return {
+          status: "success" as const,
+          result: {
+            messageId: input.messageId,
+            userId: input.userId,
+            createdAt: now(),
+            riskScore: 0,
+            confidence: 100,
+            category: null,
+            verdict: "likely_legitimate" as const,
+            signals: [],
+            evidence: [],
+            recommendedActions: [],
+            shortExplanation: "Mensaje de saludo sin contenido sospechoso.",
+            needsMoreInformation: false,
+            analysisMethod: "rule",
+          },
+        };
+      }
 
       // Validacion explicita antes de crear el agente: un evento SQS alterado
       // nunca llega a DNS, cache, proveedor ni modelo con una URL no enrutable.

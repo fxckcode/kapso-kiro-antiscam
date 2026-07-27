@@ -31,7 +31,7 @@ describe('parseWebhookBody', () => {
     if (result.kind === 'message') {
       expect(result.message.id).toBe('wamid.1');
       expect(result.message.text?.body).toBe('hola');
-      expect(result.conversationId).toBe('conv-1');
+      expect(result.conversationId).toBe('549110000000');
     }
   });
 

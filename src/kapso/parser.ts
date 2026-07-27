@@ -100,10 +100,7 @@ function parseMetaBody(json: Record<string, unknown>): ParsedWebhook {
             kind: 'message',
             message: validated,
             metadata: (v.metadata ?? {}) as KapsoMetadata,
-            conversationId:
-              typeof v.conversation_id === 'string'
-                ? v.conversation_id
-                : validated.from.replace(/^\+/, ''),
+            conversationId: validated.from.replace(/^\+/, ''),
           };
         }
       }
@@ -201,7 +198,7 @@ function parseKapsoNative(event: KapsoNativeEvent): ParsedWebhook {
 
   const phoneNumberId = event.phone_number_id ?? event.conversation?.phone_number_id;
   const metadata: KapsoMetadata = phoneNumberId !== undefined ? { phone_number_id: phoneNumberId } : {};
-  const conversationId = event.conversation?.id;
+  const conversationId = inbound.from.replace(/^\+/, '');
 
   return {
     kind: 'message',
