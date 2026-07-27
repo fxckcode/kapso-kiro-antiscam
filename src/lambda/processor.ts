@@ -17,7 +17,6 @@ import type { IdempotencyStore, ProcessingClaim } from '../queue/idempotency';
 import { loadProcessorConfig, type ProcessorConfig } from './shared/config';
 import { createLogger, type Logger } from './shared/logger';
 import { createConversationService } from '../agent/create-conversation-service';
-import { buildBedrockProviderConfig, createBedrockProvider } from '../agent/model/bedrock-provider';
 
 export interface ProcessorDeps {
   readonly responder: Responder;
@@ -246,23 +245,6 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
       ...(config.kapsoPhoneNumberId !== undefined ? { phoneNumberId: config.kapsoPhoneNumberId } : {}),
     });
     const responder = new Responder(sender);
-    const now = () => new Date().toISOString();
-    const model = createBedrockProvider(buildBedrockProviderConfig());
-    const reputationDeps = {
-      provider: {
-        check: async () => ({
-          status: 'temporary_error' as const,
-          source: 'virustotal' as const,
-          summary: 'Reputacion no disponible.',
-        }),
-      },
-      cache: {
-        get: () => null,
-        set: () => {},
-      },
-      allowlist: {} as never,
-      now,
-    } as unknown as Parameters<typeof createConversationService>[0]['reputationDeps'];
 
     cached = createProcessorHandler({
       responder,
@@ -275,10 +257,7 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
         agentTimeoutMs: config.agentTimeoutMs,
       }),
       conversationService: createConversationService({
-        model,
-        reputationDeps,
         responder,
-        now,
       }),
     });
   }
