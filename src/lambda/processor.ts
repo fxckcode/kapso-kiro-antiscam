@@ -16,12 +16,15 @@ import { validateAnalysisEvent, type AnalysisRequestedEvent } from '../queue/eve
 import type { IdempotencyStore, ProcessingClaim } from '../queue/idempotency';
 import { loadProcessorConfig, type ProcessorConfig } from './shared/config';
 import { createLogger, type Logger } from './shared/logger';
+import { createConversationService } from '../agent/create-conversation-service';
+import { buildBedrockProviderConfig, createBedrockProvider } from '../agent/model/bedrock-provider';
 
 export interface ProcessorDeps {
   readonly responder: Responder;
   readonly logger: Logger;
   readonly idempotency: IdempotencyStore;
   readonly analysisService?: AnalysisService;
+  readonly conversationService?: import('../ports/conversation.js').ConversationService;
 }
 
 export function createProcessorHandler(deps: ProcessorDeps) {
@@ -82,30 +85,47 @@ async function processRecord(record: SQSRecord, deps: ProcessorDeps): Promise<Re
     return 'retry';
   }
 
-  // Saludos y conversacion simple: responder sin gastar Bedrock.
+  // Saludos: respuesta rapida sin agentes ni Bedrock.
   const text = (analysisEvent.redactedText ?? '').toLowerCase().trim();
   const greetingPattern = /^(hola|ola|buenas?|hey|ey|qu[eé] (tal|hay|cuenta|c pasa)|c[oó]mo (est[áa]s|van)|q[uo]e se dice)\s*[.!]*$/i;
   if (greetingPattern.test(text)) {
-    const greetings = [
-      '¡Hola! 👋 Soy el asistente AntiScamBot. ¿Tenés algún mensaje sospechoso que quieras que verifique?',
+    const replies = [
+      '¡Hola! 👋 Soy el asistente AntiScamBot. ¿Tenés algún mensaje sospechoso para verificar?',
       '¡Hola! ¿Cómo estás? En qué puedo ayudarte con la seguridad hoy?',
-      '¡Buenas! Si recibiste un mensaje raro, reenviámelo y lo analizo para vos.',
-      '¡Hola! Acordate: no compartas códigos ni claves con nadie. Si querés, verifico un mensaje por vos.',
+      '¡Buenas! Si recibiste un mensaje raro, reenviámelo y lo analizo.',
     ];
-    const response = greetings[Math.floor(Math.random() * greetings.length)] as string;
+    const response = replies[Math.floor(Math.random() * replies.length)] as string;
     await deps.responder.respondWithText(analysisEvent.routingToken, response, analysisEvent.messageId as string);
     logger.info('greeting response sent', { userId: analysisEvent.userId, messageId: analysisEvent.messageId });
     return 'done';
   }
 
-  // "MAS INFO" o "más info": responder con detalles del analisis previo.
+  // "MAS INFO" o "más info": respuesta rapida.
   if (/^m[áa]s\s+info$/i.test(text) || /^detalles?$/i.test(text)) {
     const response =
-      'ℹ️ El analisis completo requiere que reenviés el mensaje sospechoso. ' +
-      'Mandame el mensaje que quieras verificar y lo analizo al instante.';
+      'ℹ️ Reenviame el mensaje sospechoso y lo analizo al instante.';
     await deps.responder.respondWithText(analysisEvent.routingToken, response, analysisEvent.messageId);
     logger.info('info response sent', { userId: analysisEvent.userId, messageId: analysisEvent.messageId });
     return 'done';
+  }
+
+  // Servicio conversacional: responde con el agente Strands.
+  if (deps.conversationService !== undefined) {
+    try {
+      const outcome = await deps.conversationService.converse(analysisEvent);
+      if (outcome.kind === 'reply') {
+        await deps.responder.respondWithText(analysisEvent.routingToken, outcome.text, analysisEvent.messageId);
+        logger.info('conversation reply sent', { userId: analysisEvent.userId, messageId: analysisEvent.messageId });
+        return 'done';
+      }
+    } catch (error) {
+      logger.error('conversation service failed', {
+        userId: analysisEvent.userId,
+        messageId: analysisEvent.messageId,
+        error: errorMessage(error),
+      });
+      // Fall through to analysis service.
+    }
   }
 
   let analysis: Awaited<ReturnType<AnalysisService['analyze']>>;
@@ -225,8 +245,27 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
       apiKey: config.kapsoApiKey,
       ...(config.kapsoPhoneNumberId !== undefined ? { phoneNumberId: config.kapsoPhoneNumberId } : {}),
     });
+    const responder = new Responder(sender);
+    const now = () => new Date().toISOString();
+    const model = createBedrockProvider(buildBedrockProviderConfig());
+    const reputationDeps = {
+      provider: {
+        check: async () => ({
+          status: 'temporary_error' as const,
+          source: 'virustotal' as const,
+          summary: 'Reputacion no disponible.',
+        }),
+      },
+      cache: {
+        get: () => null,
+        set: () => {},
+      },
+      allowlist: {} as never,
+      now,
+    } as unknown as Parameters<typeof createConversationService>[0]['reputationDeps'];
+
     cached = createProcessorHandler({
-      responder: new Responder(sender),
+      responder,
       logger: createLogger(),
       idempotency: new DynamoIdempotencyStore({
         client: documentClient,
@@ -234,6 +273,12 @@ export async function handler(event: SQSEvent): Promise<SQSBatchResponse> {
       }),
       analysisService: createAntiScamAnalysisService({
         agentTimeoutMs: config.agentTimeoutMs,
+      }),
+      conversationService: createConversationService({
+        model,
+        reputationDeps,
+        responder,
+        now,
       }),
     });
   }
