@@ -241,6 +241,24 @@ export const DEFAULT_RULES: readonly DetectionRule[] = [
       });
     },
   },
+  {
+    type: "nonsense_url_path",
+    description:
+      "La URL contiene una ruta con caracteres sin sentido, tipico de dominios generados aleatoriamente o enlaces manipulados.",
+    weight: 25,
+    matches: (t) => {
+      const pathSegments = t.match(/https?:\/\/[^\/\s?#]+\/([^\s?#]*)/g) ?? [];
+      const REPEATED_CHARS = /([a-z])\1{3,}/;
+      const CONSONANT_RUN = /[bcdfghjklmnpqrstvwxyz]{7,}/;
+      return pathSegments.some((fullUrl) => {
+        const path = fullUrl.replace(/^https?:\/\/[^\/]+/, "");
+        const segments = path.split("/").filter(Boolean);
+        return segments.some(
+          (seg) => REPEATED_CHARS.test(seg) || CONSONANT_RUN.test(seg) || (seg.length > 15 && /^[a-z]+$/.test(seg))
+        );
+      });
+    },
+  },
 ];
 
 /**

@@ -34,9 +34,15 @@ export function createConversationService(_deps: ConversationServiceDeps): Conve
         return { kind: 'reply', text: replies[Math.floor(Math.random() * replies.length)] as string };
       }
 
-      // Si hay señales de riesgo, pasar directamente al análisis completo
-      // sin enviar feedback intermedio para evitar duplicar respuestas.
+      // Si hay senales de riesgo, enviar feedback inmediato al usuario
+      // y luego pasar al analisis completo. Dos mensajes es el comportamiento
+      // esperado: feedback instantaneo + analisis detallado.
       if (signals.length > 0) {
+        await _deps.responder.respondWithText(
+          event.routingToken,
+          '⏳ Analizando el mensaje... Esto toma solo unos segundos.',
+          event.messageId,
+        );
         return { kind: 'needs_analysis' };
       }
 
