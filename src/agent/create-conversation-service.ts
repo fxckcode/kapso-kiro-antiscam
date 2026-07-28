@@ -12,6 +12,45 @@ import type { Responder } from '../messaging/responder.js';
 import type { ConversationService, ConversationOutcome } from '../ports/conversation.js';
 import type { AnalysisRequestedEvent } from '../queue/events';
 
+/** Dominios de sitios oficiales conocidos que nunca deben generar alarma. */
+const TRUSTED_DOMAINS = new Set([
+  'cursor.com',
+  'github.com',
+  'gitlab.com',
+  'bitbucket.org',
+  'google.com',
+  'youtube.com',
+  'facebook.com',
+  'instagram.com',
+  'x.com',
+  'twitter.com',
+  'linkedin.com',
+  'whatsapp.com',
+  'telegram.org',
+  'discord.com',
+  'notion.so',
+  'figma.com',
+  'vercel.com',
+  'netlify.com',
+  'aws.amazon.com',
+  'azure.microsoft.com',
+  'cloudflare.com',
+  'supabase.com',
+  'mongodb.com',
+  'postgresql.org',
+  'docker.com',
+  'npmjs.com',
+  'pnpm.io',
+  'typescriptlang.org',
+  'react.dev',
+  'nextjs.org',
+  'angular.io',
+  'nestjs.com',
+  'nodejs.org',
+  'python.org',
+  'rust-lang.org',
+]);
+
 export interface ConversationServiceDeps {
   readonly responder: Responder;
 }
@@ -23,8 +62,28 @@ export function createConversationService(deps: ConversationServiceDeps): Conver
       const signals = evaluateRules(redacted);
       const lower = event.redactedText.toLowerCase().trim();
 
+      // Revisar si las URLs son de dominios confiables
+      const isTrustedDomain = (event.urlReferences ?? []).some((ref) => {
+        try {
+          const host = new URL(ref.reputationUrl).hostname.replace(/^www\./, '');
+          return TRUSTED_DOMAINS.has(host) || [...TRUSTED_DOMAINS].some((d) => host.endsWith('.' + d));
+        } catch { return false; }
+      });
+
       // Tambien revisar urlReferences por parametros de rastreo
       const hasTrackingRef = (event.urlReferences ?? []).some((ref) => ref.hasTrackingParams);
+      if (hasTrackingRef && isTrustedDomain) {
+        // Dominio confiable con tracking: respuesta informativa, no alarmista
+        const reply =
+          `ℹ️ El enlace es de un sitio oficial y no presenta señales de riesgo.\n\n` +
+          `Tiene parámetros de rastreo (UTMs) que son normales para enlaces compartidos. ` +
+          `No hay indicios de estafa o suplantación.\n\n` +
+          `Recomendación: El enlace es seguro, pero siempre verificá que la URL corresponda ` +
+          `al sitio oficial antes de ingresar datos.\n\n` +
+          `Esto es orientativo, no asesoramiento.`;
+        return { kind: 'reply', text: reply };
+      }
+
       if (hasTrackingRef) {
         signals.push({
           type: "tracking_url",
