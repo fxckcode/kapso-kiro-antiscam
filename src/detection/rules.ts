@@ -94,19 +94,28 @@ function registrableDomain(host: string): string {
   return labels.slice(-2).join(".");
 }
 
+/** Normaliza leetspeak: reemplaza digitos y simbolos por letras. */
+function normalizeLeet(text: string): string {
+  return text
+    .replace(/0/g, 'o').replace(/1/g, 'l').replace(/2/g, 'z')
+    .replace(/3/g, 'e').replace(/4/g, 'a').replace(/5/g, 's')
+    .replace(/6/g, 'g').replace(/7/g, 't').replace(/8/g, 'b')
+    .replace(/9/g, 'g');
+}
+
 /**
  * Detecta un host que menciona una marca conocida como etiqueta (separada por
- * `.` o `-`) pero cuyo dominio registrable NO es el oficial de esa marca. Es la
- * variante robusta de "dominio similar"; se documenta que sigue siendo una
- * heuristica y puede omitir casos (homoglifos, IDN) o, en dominios legitimos
- * poco comunes, generar un falso positivo de peso moderado.
+ * `.` o `-`) pero cuyo dominio registrable NO es el oficial de esa marca.
+ * Soporta leetspeak: "paypa1" → "paypal".
  */
 function looksLikeBrandLookalike(hosts: readonly string[]): boolean {
   for (const host of hosts) {
     const registrable = registrableDomain(host);
     const tokens = new Set(host.split(/[.-]/).filter(Boolean));
+    // Normalizar tokens para detectar leetspeak
+    const normalizedTokens = new Set([...tokens].map(normalizeLeet));
     for (const [brand, official] of Object.entries(BRANDS)) {
-      if (tokens.has(brand) && !official.includes(registrable)) {
+      if ((tokens.has(brand) || normalizedTokens.has(brand)) && !official.includes(registrable)) {
         return true;
       }
     }
@@ -257,6 +266,16 @@ export const DEFAULT_RULES: readonly DetectionRule[] = [
           (seg) => REPEATED_CHARS.test(seg) || CONSONANT_RUN.test(seg) || (seg.length > 15 && /^[a-z]+$/.test(seg))
         );
       });
+    },
+  },
+  {
+    type: "suspicious_tld",
+    description:
+      "El enlace usa un dominio con TLD sospechoso, frecuente en sitios de phishing.",
+    weight: 20,
+    matches: (t) => {
+      const SUSPICIOUS_TLDS = /\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(xyz|top|click|link|download|review|trade|webcam|men|loan|win|bid|date|racing|science|gdn)\b/i;
+      return SUSPICIOUS_TLDS.test(t);
     },
   },
 ];
