@@ -76,7 +76,7 @@ export function validateAnalysisEvent(value: unknown): readonly string[] {
     const ids = new Set<string>();
     const urls = new Set<string>();
     for (const ref of refs) {
-      if (!isRecord(ref) || Object.keys(ref).length !== 2 || !isId(ref['referenceId'])) {
+      if (!isRecord(ref) || Object.keys(ref).length < 2 || Object.keys(ref).length > 3 || !isId(ref['referenceId'])) {
         errors.push('urlReference must contain a valid referenceId only');
         continue;
       }
